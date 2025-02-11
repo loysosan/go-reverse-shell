@@ -2,22 +2,26 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
-	"net"
 	"os"
 )
 
 const serverAddress = "127.0.0.1:9000"
 
 func main() {
-	conn, err := net.Dial("tcp", serverAddress)
+	// Configure TLS (disable verification for self-signed certificates)
+	config := &tls.Config{InsecureSkipVerify: true}
+
+	// Connect to the TLS server
+	conn, err := tls.Dial("tcp", serverAddress, config)
 	if err != nil {
 		fmt.Println("Server connection ERROR:", err)
 		return
 	}
 	defer conn.Close()
 
-	fmt.Println("Connected to server. Please enter command:")
+	fmt.Println("Connected to the TLS server. Please enter command:")
 
 	reader := bufio.NewReader(os.Stdin)
 
@@ -27,15 +31,15 @@ func main() {
 
 		_, err := conn.Write([]byte(command))
 		if err != nil {
-			fmt.Println("Error data sending:", err)
+			fmt.Println("Error sending data:", err)
 			break
 		}
 
-		// Red server responce
+		// Read server response
 		response := make([]byte, 4096)
 		n, err := conn.Read(response)
 		if err != nil {
-			fmt.Println("Error reciving responce", err)
+			fmt.Println("Error receiving response:", err)
 			break
 		}
 
