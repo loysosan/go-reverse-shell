@@ -47,14 +47,14 @@ func handleClient(conn net.Conn, clientID int) {
 }
 
 func main() {
-	// Загружаем TLS сертификат
+	// Upload TLS cert
 	cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
 	if err != nil {
 		fmt.Println("Error loading certificate:", err)
 		return
 	}
 
-	// Настройка TLS сервера
+	// Configure TLS server
 	config := &tls.Config{Certificates: []tls.Certificate{cert}}
 	ln, err := tls.Listen("tcp", ":8080", config)
 	if err != nil {
