@@ -23,7 +23,7 @@ func handleClient(conn net.Conn, clientID int) {
 	fmt.Printf("Client %d connected: %s\n", clientID, clientRemoteAddr)
 
 	for {
-		// Читаем длину ответа
+		// Read reponse length
 		var length int32
 		err := binary.Read(conn, binary.LittleEndian, &length)
 		if err != nil {
@@ -34,7 +34,7 @@ func handleClient(conn net.Conn, clientID int) {
 			return
 		}
 
-		// Читаем сам ответ
+		// Read responce
 		response := make([]byte, length)
 		_, err = conn.Read(response)
 		if err != nil {
