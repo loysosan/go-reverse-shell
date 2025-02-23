@@ -2,6 +2,7 @@ TMP_BUILDDIR := release
 ARCH := tar
 
 make-all: 
+	rm -rf ${TMP_BUILDDIR}
 	mkdir ${TMP_BUILDDIR}
 	openssl req -x509 -newkey rsa:4096 -keyout ${TMP_BUILDDIR}/key.pem -out ${TMP_BUILDDIR}/cert.pem -days 365 -nodes -subj "/C=US/ST=California/L=San Francisco/O=MyCompany/OU=IT/CN=example.com"
 	$(MAKE) make-server
