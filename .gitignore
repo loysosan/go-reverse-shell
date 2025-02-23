@@ -56,3 +56,4 @@ Thumbs.db
 # Other
 config.ini
 *.pem
+release/
